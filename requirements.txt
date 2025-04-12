@@ -3,3 +3,6 @@ transformers
 langchain
 requests
 yt-dlp
+torch
+sentencepiece
+protobuf
