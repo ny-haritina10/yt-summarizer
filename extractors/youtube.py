@@ -3,6 +3,7 @@ import logging
 from typing import Union, List, Dict, Optional
 from youtube_transcript_api import YouTubeTranscriptApi, TranscriptsDisabled, NoTranscriptFound
 import yt_dlp
+import os
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -163,6 +164,47 @@ def get_transcript(video_id: str, languages: List[str] = ['en']) -> Optional[str
         logger.error(f"An unexpected error occurred fetching transcript for video ID {video_id}: {e}")
         return None
 
+def save_transcript_to_markdown(metadata: Dict, transcript: Optional[str], output_dir: str = "transcripts") -> None:
+    """
+    Saves the transcript to a markdown file with metadata.
+    
+    Args:
+        metadata: Dictionary containing video metadata
+        transcript: The transcript text or None
+        output_dir: Directory to save the markdown file
+    """
+    if not transcript:
+        logger.warning("No transcript to save")
+        return
+
+    # Create output directory if it doesn't exist
+    os.makedirs(output_dir, exist_ok=True)
+    
+    # Sanitize title for filename
+    safe_title = "".join(c for c in metadata['title'] if c.isalnum() or c in (' ', '-', '_')).rstrip()
+    filename = f"{output_dir}/{safe_title}_{metadata['video_id']}.md"
+    
+    # Create markdown content
+    markdown_content = f"""# {metadata['title']}
+
+    ## Video Metadata
+    - **Video ID**: {metadata['video_id']}
+    - **Channel**: {metadata['channel']}
+    - **Upload Date**: {metadata['upload_date']}
+    - **Duration**: {metadata['duration']} seconds
+    - **URL**: {metadata['url']}
+
+    ## Transcript
+    {transcript}
+    """
+    
+    try:
+        with open(filename, 'w', encoding='utf-8') as f:
+            f.write(markdown_content)
+        logger.info(f"Successfully saved transcript to {filename}")
+    except Exception as e:
+        logger.error(f"Failed to save transcript to {filename}: {e}")
+
 def extract_content(url: str, transcript_languages: List[str] = ['en']) -> Optional[Dict]: 
     """
     Main function to validate a YouTube URL, extract metadata, and fetch the transcript.
@@ -194,6 +236,8 @@ def extract_content(url: str, transcript_languages: List[str] = ['en']) -> Optio
     transcript = get_transcript(video_id, languages=transcript_languages)
     if not transcript:
         logger.warning(f"Could not retrieve transcript for video ID: {video_id}. Proceeding without it.")
+        
+    save_transcript_to_markdown(metadata, transcript)
 
     # 4. Return combined results
     logger.info(f"Content extraction completed for video ID: {video_id}")
@@ -201,10 +245,10 @@ def extract_content(url: str, transcript_languages: List[str] = ['en']) -> Optio
         "metadata": metadata, # Dictionary of metadata
         "transcript": transcript # String or None
     }
-    
+
 if __name__ == '__main__':
     
-    test_url_valid = "https://www.youtube.com/watch?v=riX2Ww80Ow0"
+    test_url_valid = "https://www.youtube.com/watch?v=v34Eg12mhDM"
 
     print("\n--- Testing Valid URL ---")
     content = extract_content(test_url_valid)

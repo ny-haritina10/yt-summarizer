@@ -12,9 +12,6 @@ logger = logging.getLogger(__name__)
 SUMMARIZATION_MODEL = "facebook/bart-large-cnn"
 SUMMARIZATION_API_URL = f"https://api-inference.huggingface.co/models/{SUMMARIZATION_MODEL}"
 
-REFINEMENT_MODEL = "mistralai/Mistral-7B-Instruct-v0.1"
-REFINEMENT_API_URL = f"https://api-inference.huggingface.co/models/{REFINEMENT_MODEL}"
-
 summary_cache: Dict[str, str] = {}
 
 CONFIG_FILE = 'config.json'
@@ -152,58 +149,6 @@ def query_hf_api(
              return None 
     return None
 
-def refine_summary_with_llm(
-    summary_text: str,
-    api_token: str,
-    max_new_tokens: int = 250 
-    ) -> Optional[str]:
-    """
-    Uses a text-generation LLM via API to refine a given summary.
-
-    Args:
-        summary_text: The initial summary text to refine.
-        api_token: The Hugging Face API token.
-        max_new_tokens: Max tokens the refinement model should generate.
-
-    Returns:
-        The refined summary text, or None if refinement fails.
-    """
-    logger.info("Attempting to refine summary using LLM...")
-
-    prompt = (
-        f"Please refine the following summary for clarity, organization, and readability. "
-        f"Ensure it flows well and captures the key points accurately. "
-        f"Format the output clearly, using paragraphs or bullet points if helpful.\n\n"
-        f"Original Summary:\n{summary_text}\n\n"
-        f"Refined Summary:"
-    )
-
-    payload = {
-        "inputs": prompt,
-        "parameters": {
-            "max_new_tokens": max_new_tokens,
-            "do_sample": False, 
-            "temperature": 0.7, # creativity
-            "return_full_text": False 
-        }
-    }
-
-    api_response = query_hf_api(REFINEMENT_API_URL, payload, api_token)
-
-    if api_response:
-        if isinstance(api_response, list) and len(api_response) > 0 and 'generated_text' in api_response[0]:
-            refined_text = api_response[0]['generated_text'].strip()
-
-            logger.info("Successfully refined summary.")
-            return refined_text
-        else:
-            logger.error(f"Unexpected API response format during refinement: {api_response}")
-            return None
-    else:
-        logger.error("Failed to get response from refinement API.")
-        return None
-
-
 def summarize_transcript(
     transcript: str,
     video_id: str, 
@@ -264,6 +209,7 @@ def summarize_transcript(
                 "do_sample": False
             }
         }
+        
         api_response = query_hf_api(SUMMARIZATION_API_URL, payload, api_token)
 
         if api_response:
@@ -287,18 +233,15 @@ def summarize_transcript(
 
     # 7. Refine summary using LLM API (if requested)
     final_summary = initial_summary
-    if refine:
-        refined_summary = refine_summary_with_llm(initial_summary, api_token)
-        if refined_summary:
-            final_summary = refined_summary
-        else:
-            logger.warning("Refinement step failed. Using the initial summary.")
-            cache_key = video_id 
             
     # 8. Update cache with the final result
     logger.info(f"Caching final summary under key: {cache_key}")
     summary_cache[cache_key] = final_summary
     return final_summary
+
+# ---------- #
+# -- MAIN -- #
+# ---------- #
 
 if __name__ == '__main__':
     loaded_token = load_config()
@@ -976,26 +919,3 @@ if __name__ == '__main__':
         print(summary)
     else:
         print("Summarization failed.")
-
-    # Test caching (should hit cache now)
-    print("\n--- Testing Caching (Refined) ---")
-    summary_cached = summarize_transcript(example_transcript, example_video_id, refine=True)
-    if summary_cached:
-        print("Retrieved refined cached summary successfully.")
-    else:
-        print("Cache test failed.")
-
-    print("\n--- Testing API Summarization WITHOUT Refinement ---")
-    summary_no_refine = summarize_transcript(
-        example_transcript,
-        example_video_id, # Use same ID, but different cache key internally
-        max_summary_length=200,
-        min_summary_length=50,
-        max_chunk_chars=3000,
-        refine=False
-    )
-    if summary_no_refine:
-         print("\nGenerated Summary (Initial - No Refinement):")
-         print(summary_no_refine)
-    else:
-         print("Summarization without refinement failed.")
