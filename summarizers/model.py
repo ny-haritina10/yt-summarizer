@@ -984,13 +984,18 @@ if __name__ == '__main__':
     """
     example_video_id = "jwst_api_example_refined"
 
-    print("\n--- Testing API Summarization with Refinement ---")
+    print("\n--- Testing API Summarization ---")
     summary = summarize_transcript(
-        example_transcript,
-        example_video_id,
-        max_summary_length=200, # Target for BART summary
-        min_summary_length=50,
-        max_chunk_chars=3000
+        transcript=example_transcript,
+        video_id=example_video_id,
+        title="Example Video Title", 
+        max_chunk_summary_length=150,  
+        min_chunk_summary_length=30,   
+        max_final_summary_length=200,  
+        min_final_summary_length=50,   
+        max_chunk_chars=3000,
+        save_to_file=True,
+        output_dir="summaries"  
     )
 
     if summary:
