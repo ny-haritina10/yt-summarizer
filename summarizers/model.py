@@ -149,27 +149,73 @@ def query_hf_api(
              return None 
     return None
 
+def save_summary_to_markdown(
+    video_id: str, 
+    summary: str, 
+    title: Optional[str] = None,
+    output_dir: str = "summaries"
+) -> Optional[str]:
+    """
+    Saves a video summary to a markdown file.
+    
+    Args:
+        video_id: The unique ID of the video.
+        summary: The summary text to save.
+        title: Optional title of the video (default: uses video_id as title).
+        output_dir: Directory where summaries will be stored (created if doesn't exist).
+        
+    Returns:
+        The path to the saved file if successful, None otherwise.
+    """
+    try:
+        # Create output directory if it doesn't exist
+        os.makedirs(output_dir, exist_ok=True)
+        
+        # Prepare filename and path
+        safe_video_id = re.sub(r'[^\w\-]', '_', video_id)  # Remove special chars from ID
+        filename = f"{safe_video_id}.md"
+        file_path = os.path.join(output_dir, filename)
+        
+        # Prepare content with frontmatter
+        current_date = time.strftime("%Y-%m-%d")
+        
+        # Structure the markdown content
+        markdown_content = f"""---
+            video_id: {video_id}
+            title: {title or video_id}
+            date: {current_date}
+            ---
+
+            # Summary: {title or f"Video {video_id}"}
+
+            {summary}
+        """
+
+        # Write to file
+        with open(file_path, 'w', encoding='utf-8') as f:
+            f.write(markdown_content)
+            
+        logger.info(f"Successfully saved summary to {file_path}")
+        return file_path
+        
+    except Exception as e:
+        logger.error(f"Failed to save summary to markdown file: {e}")
+        return None
+
 def summarize_transcript(
     transcript: str,
     video_id: str, 
-    max_summary_length: int = 150,
-    min_summary_length: int = 30,
+    title: Optional[str] = None,
+    max_chunk_summary_length: int = 150,
+    min_chunk_summary_length: int = 30,
+    max_final_summary_length: int = 300,
+    min_final_summary_length: int = 100,
     max_chunk_chars: int = 4000,
-    refine: bool = True 
+    save_to_file: bool = True,
+    output_dir: str = "summaries"
 ) -> Optional[str]:
     """
-    Summarizes transcript using API, optionally refines using another LLM API.
-
-    Args:
-        transcript: The transcript text to summarize.
-        video_id: The unique ID of the video (for caching).
-        max_summary_length: Target max length for initial summary (tokens, approx).
-        min_summary_length: Target min length for initial summary (tokens, approx).
-        max_chunk_chars: Max characters per chunk sent to the summarization API.
-        refine: Whether to perform the LLM refinement step (default: True).
-
-    Returns:
-        The final (potentially refined) summary text, or None if summarization fails.
+    Two-pass summarization: First summarizes chunks, then summarizes the combined results.
     """
     # 1. Load API Token
     api_token = load_config()
@@ -177,13 +223,13 @@ def summarize_transcript(
         logger.error("Cannot summarize: Missing Hugging Face API Token.")
         return None
 
-    # 2. Check cache for the final (refined) summary
-    cache_key = f"{video_id}_refined" if refine else video_id
+    # 2. Check cache for the final summary
+    cache_key = f"{video_id}_refined"
     if cache_key in summary_cache:
         logger.info(f"Returning cached summary for key: {cache_key}")
         return summary_cache[cache_key]
 
-    logger.info(f"Starting API-based summarization for video ID: {video_id} (Refine={refine})")
+    logger.info(f"Starting two-pass summarization for video ID: {video_id}")
 
     # 3. Preprocess
     processed_text = preprocess_text(transcript)
@@ -194,18 +240,18 @@ def summarize_transcript(
     # 4. Chunk text
     text_chunks = chunk_text_by_chars(processed_text, max_chunk_chars)
 
-    # 5. Summarize chunks via Summarization API
+    # 5. First pass: Summarize chunks via Summarization API
     chunk_summaries = []
     total_chunks = len(text_chunks)
     for i, chunk in enumerate(text_chunks):
-        logger.info(f"Summarizing chunk {i+1}/{total_chunks} via API...")
+        logger.info(f"First pass: Summarizing chunk {i+1}/{total_chunks} via API...")
         if not chunk.strip(): continue
 
         payload = {
             "inputs": chunk,
             "parameters": {
-                "max_length": max_summary_length,
-                "min_length": min_summary_length,
+                "max_length": max_chunk_summary_length,
+                "min_length": min_chunk_summary_length,
                 "do_sample": False
             }
         }
@@ -224,19 +270,55 @@ def summarize_transcript(
             return None
 
     # 6. Combine chunk summaries
-    initial_summary = " ".join(chunk_summaries).strip()
-    if not initial_summary:
-         logger.warning("Initial summary is empty after combining chunks.")
+    combined_summaries = " ".join(chunk_summaries).strip()
+    if not combined_summaries:
+         logger.warning("Combined summaries are empty after first pass.")
          return "" 
 
-    logger.info(f"Successfully generated initial summary via API for video ID: {video_id}")
-
-    # 7. Refine summary using LLM API (if requested)
-    final_summary = initial_summary
-            
+    logger.info(f"Successfully generated first-pass summaries. Moving to second pass.")
+    
+    # 7. Second pass: Summarize the combined summaries
+    logger.info("Second pass: Summarizing the combined chunk summaries...")
+    
+    second_pass_payload = {
+        "inputs": combined_summaries,
+        "parameters": {
+            "max_length": max_final_summary_length,
+            "min_length": min_final_summary_length,
+            "do_sample": False
+        }
+    }
+    
+    final_response = query_hf_api(SUMMARIZATION_API_URL, second_pass_payload, api_token)
+    
+    if final_response:
+        if isinstance(final_response, list) and len(final_response) > 0 and 'summary_text' in final_response[0]:
+            final_summary = final_response[0]['summary_text']
+            logger.info("Successfully generated final summary.")
+        else:
+            logger.error(f"Unexpected API response format for final summary: {final_response}")
+            return None
+    else:
+        logger.error("Failed to generate final summary. Falling back to combined summaries.")
+        final_summary = combined_summaries
+    
     # 8. Update cache with the final result
     logger.info(f"Caching final summary under key: {cache_key}")
     summary_cache[cache_key] = final_summary
+    
+    # 9. Save to markdown file if requested
+    if save_to_file:
+        file_path = save_summary_to_markdown(
+            video_id=video_id,
+            summary=final_summary,
+            title=title,
+            output_dir=output_dir
+        )
+        if file_path:
+            logger.info(f"Summary saved to file: {file_path}")
+        else:
+            logger.warning(f"Failed to save summary to file")
+    
     return final_summary
 
 # ---------- #
@@ -908,8 +990,7 @@ if __name__ == '__main__':
         example_video_id,
         max_summary_length=200, # Target for BART summary
         min_summary_length=50,
-        max_chunk_chars=3000, # Chars per BART call
-        refine=True
+        max_chunk_chars=3000
     )
 
     if summary:
