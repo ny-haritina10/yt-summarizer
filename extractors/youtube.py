@@ -248,7 +248,7 @@ def extract_content(url: str, transcript_languages: List[str] = ['en']) -> Optio
 
 if __name__ == '__main__':
     
-    test_url_valid = "https://www.youtube.com/watch?v=v34Eg12mhDM"
+    test_url_valid = "https://www.youtube.com/watch?v=IACHfKmZMr8"
 
     print("\n--- Testing Valid URL ---")
     content = extract_content(test_url_valid)
